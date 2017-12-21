@@ -41,14 +41,14 @@ use syntax::codemap::{CodeMap, FilePathMapping};
 use syntax::parse::lexer::{self, TokenAndSpan};
 use syntax::parse::token;
 use syntax::parse;
-use syntax_pos::Span;
+use syntax_pos::{Span, FileName};
 
 /// Highlights `src`, returning the HTML output.
 pub fn render_with_highlighting(src: &str, class: Option<&str>, id: Option<&str>,
                                 extension: Option<&str>) -> String {
     debug!("highlighting: ================\n{}\n==============", src);
     let sess = parse::ParseSess::new(FilePathMapping::empty());
-    let fm = sess.codemap().new_filemap("<stdin>".to_string(), src.to_string());
+    let fm = sess.codemap().new_filemap(FileName::Custom("stdin".to_string()), src.to_string());
 
     let mut out = Vec::new();
     write_header(class, id, &mut out).unwrap();
@@ -70,7 +70,7 @@ pub fn render_with_highlighting(src: &str, class: Option<&str>, id: Option<&str>
 /// an enclosing `<pre>` block.
 pub fn render_inner_with_highlighting(src: &str) -> io::Result<String> {
     let sess = parse::ParseSess::new(FilePathMapping::empty());
-    let fm = sess.codemap().new_filemap("<stdin>".to_string(), src.to_string());
+    let fm = sess.codemap().new_filemap(FileName::Custom("stdin".to_string()), src.to_string());
 
     let mut out = Vec::new();
     let mut classifier = Classifier::new(lexer::StringReader::new(&sess, fm), sess.codemap());
