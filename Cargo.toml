@@ -9,4 +9,4 @@ license = "Apache-2.0/MIT"
 categories = ["development-tools", "web-programming"]
 
 [dependencies]
-log = "0.3"
+log = "0.4"
