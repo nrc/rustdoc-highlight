@@ -253,7 +253,7 @@ impl<'a> Classifier<'a> {
             token::Dot | token::DotDot | token::DotDotDot | token::DotDotEq | token::Comma |
                 token::Semi | token::Colon | token::ModSep | token::LArrow | token::OpenDelim(_) |
                 token::CloseDelim(token::Brace) | token::CloseDelim(token::Paren) |
-                token::CloseDelim(token::NoDelim) => Class::None,
+                token::CloseDelim(token::NoDelim) | token::SingleQuote => Class::None,
 
             token::Question => Class::QuestionMark,
 
