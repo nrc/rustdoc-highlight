@@ -53,7 +53,7 @@ pub fn render_with_highlighting(src: &str, class: Option<&str>, id: Option<&str>
     let mut out = Vec::new();
     write_header(class, id, &mut out).unwrap();
 
-    let mut classifier = Classifier::new(lexer::StringReader::new(&sess, fm), sess.codemap());
+    let mut classifier = Classifier::new(lexer::StringReader::new(&sess, fm, None), sess.codemap());
     if let Err(_) = classifier.write_source(&mut out) {
         return format!("<pre>{}</pre>", src);
     }
@@ -73,7 +73,7 @@ pub fn render_inner_with_highlighting(src: &str) -> io::Result<String> {
     let fm = sess.codemap().new_filemap(FileName::Custom("stdin".to_string()), src.to_string());
 
     let mut out = Vec::new();
-    let mut classifier = Classifier::new(lexer::StringReader::new(&sess, fm), sess.codemap());
+    let mut classifier = Classifier::new(lexer::StringReader::new(&sess, fm, None), sess.codemap());
     classifier.write_source(&mut out)?;
 
     Ok(String::from_utf8_lossy(&out).into_owned())
