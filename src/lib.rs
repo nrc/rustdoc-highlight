@@ -331,6 +331,7 @@ impl<'a> Classifier<'a> {
 
             token::Eof | token::Interpolated(..) |
             token::Tilde | token::At | token::DotEq => Class::None,
+            _ => return Ok(()),
         };
 
         // Anything that didn't return above is the simple case where we the
