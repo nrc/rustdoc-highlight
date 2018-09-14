@@ -37,7 +37,7 @@ use std::fmt::Display;
 use std::io;
 use std::io::prelude::*;
 
-use syntax::codemap::{CodeMap, FilePathMapping};
+use syntax::source_map::{SourceMap, FilePathMapping};
 use syntax::parse::lexer::{self, TokenAndSpan};
 use syntax::parse::token;
 use syntax::parse;
@@ -48,12 +48,12 @@ pub fn render_with_highlighting(src: &str, class: Option<&str>, id: Option<&str>
                                 extension: Option<&str>) -> String {
     debug!("highlighting: ================\n{}\n==============", src);
     let sess = parse::ParseSess::new(FilePathMapping::empty());
-    let fm = sess.codemap().new_filemap(FileName::Custom("stdin".to_string()), src.to_string());
+    let fm = sess.source_map().new_source_file(FileName::Custom("stdin".to_string()), src.to_string());
 
     let mut out = Vec::new();
     write_header(class, id, &mut out).unwrap();
 
-    let mut classifier = Classifier::new(lexer::StringReader::new(&sess, fm, None), sess.codemap());
+    let mut classifier = Classifier::new(lexer::StringReader::new(&sess, fm, None), sess.source_map());
     if let Err(_) = classifier.write_source(&mut out) {
         return format!("<pre>{}</pre>", src);
     }
@@ -70,10 +70,10 @@ pub fn render_with_highlighting(src: &str, class: Option<&str>, id: Option<&str>
 /// an enclosing `<pre>` block.
 pub fn render_inner_with_highlighting(src: &str) -> io::Result<String> {
     let sess = parse::ParseSess::new(FilePathMapping::empty());
-    let fm = sess.codemap().new_filemap(FileName::Custom("stdin".to_string()), src.to_string());
+    let fm = sess.source_map().new_source_file(FileName::Custom("stdin".to_string()), src.to_string());
 
     let mut out = Vec::new();
-    let mut classifier = Classifier::new(lexer::StringReader::new(&sess, fm, None), sess.codemap());
+    let mut classifier = Classifier::new(lexer::StringReader::new(&sess, fm, None), sess.source_map());
     classifier.write_source(&mut out)?;
 
     Ok(String::from_utf8_lossy(&out).into_owned())
@@ -84,7 +84,7 @@ pub fn render_inner_with_highlighting(src: &str) -> io::Result<String> {
 /// each span of text in sequence.
 pub struct Classifier<'a> {
     lexer: lexer::StringReader<'a>,
-    codemap: &'a CodeMap,
+    source_map: &'a SourceMap,
 
     // State of the classifier.
     in_attribute: bool,
@@ -173,10 +173,10 @@ impl<U: Write> Writer for U {
 }
 
 impl<'a> Classifier<'a> {
-    pub fn new(lexer: lexer::StringReader<'a>, codemap: &'a CodeMap) -> Classifier<'a> {
+    pub fn new(lexer: lexer::StringReader<'a>, source_map: &'a SourceMap) -> Classifier<'a> {
         Classifier {
-            lexer: lexer,
-            codemap: codemap,
+            lexer,
+            source_map,
             in_attribute: false,
             in_macro: false,
             in_macro_nonterminal: false,
@@ -338,9 +338,9 @@ impl<'a> Classifier<'a> {
         out.string(Escape(&self.snip(tas.sp)), klass, Some(&tas))
     }
 
-    // Helper function to get a snippet from the codemap.
+    // Helper function to get a snippet from the source_map.
     fn snip(&self, sp: Span) -> String {
-        self.codemap.span_to_snippet(sp).unwrap()
+        self.source_map.span_to_snippet(sp).unwrap()
     }
 }
 
