@@ -330,7 +330,7 @@ impl<'a> Classifier<'a> {
             token::Lifetime(..) => Class::Lifetime,
 
             token::Eof | token::Interpolated(..) |
-            token::Tilde | token::At | token::DotEq => Class::None,
+            token::Tilde | token::At => Class::None,
         };
 
         // Anything that didn't return above is the simple case where we the
