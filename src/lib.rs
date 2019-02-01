@@ -292,7 +292,7 @@ impl<'a> Classifier<'a> {
                     // Text literals.
                     token::Byte(..) | token::Char(..) |
                         token::ByteStr(..) | token::ByteStrRaw(..) |
-                        token::Str_(..) | token::StrRaw(..) => Class::String,
+                        token::Str_(..) | token::StrRaw(..) | token::Err(..) => Class::String,
 
                     // Number literals.
                     token::Integer(..) | token::Float(..) => Class::Number,
@@ -365,7 +365,7 @@ impl Class {
             Class::Lifetime => "lifetime",
             Class::PreludeTy => "prelude-ty",
             Class::PreludeVal => "prelude-val",
-            Class::QuestionMark => "question-mark"
+            Class::QuestionMark => "question-mark",
         }
     }
 }
