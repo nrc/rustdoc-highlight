@@ -170,7 +170,8 @@ pub trait Writer {
     /// more flexible.
     fn string<T: Display>(&mut self,
                           text: T,
-                          klass: Class)
+                          klass: Class,
+                          tok: Option<Token>)
                           -> io::Result<()>;
 }
 
@@ -179,7 +180,8 @@ pub trait Writer {
 impl<U: Write> Writer for U {
     fn string<T: Display>(&mut self,
                           text: T,
-                          klass: Class)
+                          klass: Class,
+                          _tok: Option<Token>)
                           -> io::Result<()> {
         match klass {
             Class::None => write!(self, "{}", text),
@@ -271,7 +273,7 @@ impl<'a> Classifier<'a> {
                               -> Result<(), HighlightError> {
         let klass = match token.kind {
             token::Shebang(s) => {
-                out.string(Escape(&s.as_str()), Class::None)?;
+                out.string(Escape(&s.as_str()), Class::None, Some(token))?;
                 return Ok(());
             },
 
@@ -335,8 +337,8 @@ impl<'a> Classifier<'a> {
                         self.in_attribute = true;
                         out.enter_span(Class::Attribute)?;
                     }
-                    out.string("#", Class::None)?;
-                    out.string("!", Class::None)?;
+                    out.string("#", Class::None, None)?;
+                    out.string("!", Class::None, None)?;
                     return Ok(());
                 }
 
@@ -345,13 +347,13 @@ impl<'a> Classifier<'a> {
                     self.in_attribute = true;
                     out.enter_span(Class::Attribute)?;
                 }
-                out.string("#", Class::None)?;
+                out.string("#", Class::None, None)?;
                 return Ok(());
             }
             token::CloseDelim(token::Bracket) => {
                 if self.in_attribute {
                     self.in_attribute = false;
-                    out.string("]", Class::None)?;
+                    out.string("]", Class::None, None)?;
                     out.exit_span()?;
                     return Ok(());
                 } else {
@@ -408,7 +410,7 @@ impl<'a> Classifier<'a> {
 
         // Anything that didn't return above is the simple case where we the
         // class just spans a single token, so we can use the `string` method.
-        out.string(Escape(&self.snip(token.span)), klass)?;
+        out.string(Escape(&self.snip(token.span)), klass, Some(token))?;
 
         Ok(())
     }
