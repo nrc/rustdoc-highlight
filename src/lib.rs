@@ -1,13 +1,3 @@
-// Copyright 2014-2017 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! Basic syntax highlighting functionality.
 //!
 //! This module uses libsyntax's lexer to provide token-based highlighting for
@@ -21,6 +11,7 @@
 //! `Classifier`.
 
 #![feature(rustc_private)]
+#![feature(bind_by_move_pattern_guards)]
 #![cfg_attr(rustbuild, unstable(feature = "rustc_private", issue = "27812"))]
 #![cfg_attr(rustbuild, feature(staged_api))]
 
@@ -37,54 +28,77 @@ use std::fmt::Display;
 use std::io;
 use std::io::prelude::*;
 
+use syntax::source_map::{SourceMap, FilePathMapping};
+use syntax::parse::lexer;
+use syntax::parse::token::{self, Token};
 use syntax::parse;
-use syntax::parse::lexer::{self};
-use syntax::parse::token;
-use syntax::parse::token::Token;
-use syntax::source_map::{FilePathMapping, SourceMap};
-use syntax_pos::{FileName, Span};
+use syntax::symbol::{kw, sym};
+use syntax_pos::{Span, FileName};
 
 /// Highlights `src`, returning the HTML output.
 pub fn render_with_highlighting(
     src: &str,
     class: Option<&str>,
-    id: Option<&str>,
     extension: Option<&str>,
+    tooltip: Option<(&str, &str)>,
 ) -> String {
     debug!("highlighting: ================\n{}\n==============", src);
+
+    let mut out = Vec::new();
+    if let Some((tooltip, class)) = tooltip {
+        write!(out, "<div class='information'><div class='tooltip {}'>ⓘ<span \
+                     class='tooltiptext'>{}</span></div></div>",
+               class, tooltip).unwrap();
+    }
+
     let sess = parse::ParseSess::new(FilePathMapping::empty());
     let fm = sess
         .source_map()
         .new_source_file(FileName::Custom("stdin".to_string()), src.to_string());
+    let highlight_result = {
+        let lexer = lexer::StringReader::new(&sess, fm, None);
+        let mut classifier = Classifier::new(lexer, sess.source_map());
 
-    let mut out = Vec::new();
-    write_header(class, id, &mut out).unwrap();
+        let mut highlighted_source = vec![];
+        if classifier.write_source(&mut highlighted_source).is_err() {
+            Err(())
+        } else {
+            Ok(String::from_utf8_lossy(&highlighted_source).into_owned())
+        }
+    };
 
-    let mut classifier =
-        Classifier::new(lexer::StringReader::new(&sess, fm, None), sess.source_map());
-    if let Err(_) = classifier.write_source(&mut out) {
-        return format!("<pre>{}</pre>", src);
+    match highlight_result {
+        Ok(highlighted_source) => {
+            write_header(class, &mut out).unwrap();
+            write!(out, "{}", highlighted_source).unwrap();
+            if let Some(extension) = extension {
+                write!(out, "{}", extension).unwrap();
+            }
+            write_footer(&mut out).unwrap();
+        }
+        Err(()) => {
+            // If errors are encountered while trying to highlight, just emit
+            // the unhighlighted source.
+            write!(out, "<pre><code>{}</code></pre>", src).unwrap();
+        }
     }
 
-    if let Some(extension) = extension {
-        write!(out, "{}", extension).unwrap();
-    }
-    write_footer(&mut out).unwrap();
     String::from_utf8_lossy(&out[..]).into_owned()
 }
 
 /// Highlights `src`, returning the HTML output. Returns only the inner html to
 /// be inserted into an element. C.f., `render_with_highlighting` which includes
 /// an enclosing `<pre>` block.
-pub fn render_inner_with_highlighting(src: &str) -> io::Result<String> {
+pub fn render_inner_with_highlighting(src: &str) -> Result<String, HighlightError> {
     let sess = parse::ParseSess::new(FilePathMapping::empty());
     let fm = sess
         .source_map()
         .new_source_file(FileName::Custom("stdin".to_string()), src.to_string());
 
     let mut out = Vec::new();
+    let lexer = lexer::StringReader::new(&sess, fm, None);
     let mut classifier =
-        Classifier::new(lexer::StringReader::new(&sess, fm, None), sess.source_map());
+        Classifier::new(lexer, sess.source_map());
     classifier.write_source(&mut out)?;
 
     Ok(String::from_utf8_lossy(&out).into_owned())
@@ -95,6 +109,7 @@ pub fn render_inner_with_highlighting(src: &str) -> io::Result<String> {
 /// each span of text in sequence.
 pub struct Classifier<'a> {
     lexer: lexer::StringReader<'a>,
+    peek_token: Option<Token>,
     source_map: &'a SourceMap,
 
     // State of the classifier.
@@ -153,26 +168,22 @@ pub trait Writer {
     /// ```
     /// The latter can be thought of as a shorthand for the former, which is
     /// more flexible.
-    fn string<T: Display>(&mut self, text: T, klass: Class, tok: Option<&Token>) -> io::Result<()>;
+    fn string<T: Display>(&mut self,
+                          text: T,
+                          klass: Class)
+                          -> io::Result<()>;
 }
 
 // Implement `Writer` for anthing that can be written to, this just implements
 // the default rustdoc behaviour.
 impl<U: Write> Writer for U {
-    fn string<T: Display>(
-        &mut self,
-        text: T,
-        klass: Class,
-        _tas: Option<&Token>,
-    ) -> io::Result<()> {
+    fn string<T: Display>(&mut self,
+                          text: T,
+                          klass: Class)
+                          -> io::Result<()> {
         match klass {
             Class::None => write!(self, "{}", text),
-            klass => write!(
-                self,
-                "<span class=\"{}\">{}</span>",
-                klass.rustdoc_class(),
-                text
-            ),
+            klass => write!(self, "<span class=\"{}\">{}</span>", klass.rustdoc_class(), text),
         }
     }
 
@@ -185,15 +196,50 @@ impl<U: Write> Writer for U {
     }
 }
 
+pub enum HighlightError {
+    LexError,
+    IoError(io::Error),
+}
+
+impl From<io::Error> for HighlightError {
+    fn from(err: io::Error) -> Self {
+        HighlightError::IoError(err)
+    }
+}
+
 impl<'a> Classifier<'a> {
     pub fn new(lexer: lexer::StringReader<'a>, source_map: &'a SourceMap) -> Classifier<'a> {
         Classifier {
             lexer,
+            peek_token: None,
             source_map,
             in_attribute: false,
             in_macro: false,
             in_macro_nonterminal: false,
         }
+    }
+
+    /// Gets the next token out of the lexer.
+    fn try_next_token(&mut self) -> Result<Token, HighlightError> {
+        if let Some(token) = self.peek_token.take() {
+            return Ok(token);
+        }
+        let token = self.lexer.next_token();
+        if let token::Unknown(..) = &token.kind {
+            return Err(HighlightError::LexError);
+        }
+        Ok(token)
+    }
+
+    fn peek(&mut self) -> Result<&Token, HighlightError> {
+        if self.peek_token.is_none() {
+            let token = self.lexer.next_token();
+            if let token::Unknown(..) = &token.kind {
+                return Err(HighlightError::LexError);
+            }
+            self.peek_token = Some(token);
+        }
+        Ok(self.peek_token.as_ref().unwrap())
     }
 
     /// Exhausts the `lexer` writing the output into `out`.
@@ -203,62 +249,41 @@ impl<'a> Classifier<'a> {
     /// is used. All source code emission is done as slices from the source map,
     /// not from the tokens themselves, in order to stay true to the original
     /// source.
-    pub fn write_source<W: Writer>(&mut self, out: &mut W) -> io::Result<()> {
-        let mut tokens: Vec<Token> = Vec::new();
+    pub fn write_source<W: Writer>(&mut self,
+                                   out: &mut W)
+                                   -> Result<(), HighlightError> {
         loop {
-            let next = match self.lexer.try_next_token() {
-                Ok(tas) => tas,
-                Err(_) => {
-                    return Err(io::Error::new(io::ErrorKind::Other, ""));
-                }
-            };
-            if next.kind == token::Eof {
+            let next = self.try_next_token()?;
+            if next == token::Eof {
                 break;
             }
-            tokens.push(next);
-        }
 
-        let len = tokens.len();
-        for i in 0..len-1 {
-            let next = &tokens[i];
-            let peek = if i < len-1 { Some(&tokens[i + 1]) } else { None };
-            self.write_token(out, next, peek)?;
+            self.write_token(out, next)?;
         }
 
         Ok(())
-    }
+     }
 
     // Handles an individual token from the lexer.
-    fn write_token<W: Writer>(
-        &mut self,
-        out: &mut W,
-        tas: &Token,
-        peek: Option<&Token>,
-    ) -> io::Result<()> {
-        let (peek_is_ident, peek_is_whitespace, peek_is_not) = match peek {
-            Some(peek) => (
-                peek.is_ident(),
-                peek.kind == token::Whitespace,
-                peek.kind == token::Not,
-            ),
-            None => (false, false, false),
-        };
-        let klass = match tas.kind {
+    fn write_token<W: Writer>(&mut self,
+                              out: &mut W,
+                              token: Token)
+                              -> Result<(), HighlightError> {
+        let klass = match token.kind {
             token::Shebang(s) => {
-                out.string(Escape(&s.as_str()), Class::None, Some(&tas))?;
+                out.string(Escape(&s.as_str()), Class::None)?;
                 return Ok(());
-            }
+            },
 
-            token::Whitespace => Class::None,
+            token::Whitespace | token::Unknown(..) => Class::None,
             token::Comment => Class::Comment,
             token::DocComment(..) => Class::DocComment,
 
             // If this '&' or '*' token is followed by a non-whitespace token, assume that it's the
             // reference or dereference operator or a reference or pointer type, instead of the
             // bit-and or multiplication operator.
-            token::BinOp(token::And) | token::BinOp(token::Star) if !peek_is_whitespace => {
-                Class::RefKeyWord
-            }
+            token::BinOp(token::And) | token::BinOp(token::Star)
+                if self.peek()? != &token::Whitespace => Class::RefKeyWord,
 
             // Consider this as part of a macro invocation if there was a
             // leading identifier.
@@ -268,41 +293,20 @@ impl<'a> Classifier<'a> {
             }
 
             // Operators.
-            token::Eq
-            | token::Lt
-            | token::Le
-            | token::EqEq
-            | token::Ne
-            | token::Ge
-            | token::Gt
-            | token::AndAnd
-            | token::OrOr
-            | token::Not
-            | token::BinOp(..)
-            | token::RArrow
-            | token::BinOpEq(..)
-            | token::FatArrow => Class::Op,
+            token::Eq | token::Lt | token::Le | token::EqEq | token::Ne | token::Ge | token::Gt |
+                token::AndAnd | token::OrOr | token::Not | token::BinOp(..) | token::RArrow |
+                token::BinOpEq(..) | token::FatArrow => Class::Op,
 
             // Miscellaneous, no highlighting.
-            token::Dot
-            | token::DotDot
-            | token::DotDotDot
-            | token::DotDotEq
-            | token::Comma
-            | token::Semi
-            | token::Colon
-            | token::ModSep
-            | token::LArrow
-            | token::OpenDelim(_)
-            | token::CloseDelim(token::Brace)
-            | token::CloseDelim(token::Paren)
-            | token::CloseDelim(token::NoDelim)
-            | token::SingleQuote => Class::None,
+            token::Dot | token::DotDot | token::DotDotDot | token::DotDotEq | token::Comma |
+                token::Semi | token::Colon | token::ModSep | token::LArrow | token::OpenDelim(_) |
+                token::CloseDelim(token::Brace) | token::CloseDelim(token::Paren) |
+                token::CloseDelim(token::NoDelim) => Class::None,
 
             token::Question => Class::QuestionMark,
 
             token::Dollar => {
-                if peek_is_ident {
+                if self.peek()?.is_ident() {
                     self.in_macro_nonterminal = true;
                     Class::MacroNonTerminal
                 } else {
@@ -310,20 +314,44 @@ impl<'a> Classifier<'a> {
                 }
             }
 
-            // This is the start of an attribute. We're going to want to
+            // This might be the start of an attribute. We're going to want to
             // continue highlighting it as an attribute until the ending ']' is
             // seen, so skip out early. Down below we terminate the attribute
             // span when we see the ']'.
             token::Pound => {
-                self.in_attribute = true;
-                out.enter_span(Class::Attribute)?;
-                out.string("#", Class::None, None)?;
+                // We can't be sure that our # begins an attribute (it could
+                // just be appearing in a macro) until we read either `#![` or
+                // `#[` from the input stream.
+                //
+                // We don't want to start highlighting as an attribute until
+                // we're confident there is going to be a ] coming up, as
+                // otherwise # tokens in macros highlight the rest of the input
+                // as an attribute.
+
+                // Case 1: #![inner_attribute]
+                if self.peek()? == &token::Not {
+                    self.try_next_token()?; // NOTE: consumes `!` token!
+                    if self.peek()? == &token::OpenDelim(token::Bracket) {
+                        self.in_attribute = true;
+                        out.enter_span(Class::Attribute)?;
+                    }
+                    out.string("#", Class::None)?;
+                    out.string("!", Class::None)?;
+                    return Ok(());
+                }
+
+                // Case 2: #[outer_attribute]
+                if self.peek()? == &token::OpenDelim(token::Bracket) {
+                    self.in_attribute = true;
+                    out.enter_span(Class::Attribute)?;
+                }
+                out.string("#", Class::None)?;
                 return Ok(());
             }
             token::CloseDelim(token::Bracket) => {
                 if self.in_attribute {
                     self.in_attribute = false;
-                    out.string("]", Class::None, None)?;
+                    out.string("]", Class::None)?;
                     out.exit_span()?;
                     return Ok(());
                 } else {
@@ -334,55 +362,55 @@ impl<'a> Classifier<'a> {
             token::Literal(lit) => {
                 match lit.kind {
                     // Text literals.
-                    token::Byte
-                    | token::Char
-                    | token::ByteStr
-                    | token::ByteStrRaw(_)
-                    | token::Str
-                    | token::StrRaw(_)
-                    | token::Err => Class::String,
+                    token::Byte | token::Char | token::Err |
+                    token::ByteStr | token::ByteStrRaw(..) |
+                    token::Str | token::StrRaw(..) => Class::String,
 
                     // Number literals.
                     token::Integer | token::Float => Class::Number,
-                    // FIXME: Check relevance 'AST only, must never appear in a `Token`'
-                    token::Bool => Class::Bool,
+
+                    token::Bool => panic!("literal token contains `Lit::Bool`"),
                 }
             }
 
             // Keywords are also included in the identifier set.
-            token::Ident(ident, is_raw) => match &*ident.as_str() {
-                "ref" | "mut" if !is_raw => Class::RefKeyWord,
+            token::Ident(name, is_raw) => {
+                match name {
+                    kw::Ref | kw::Mut if !is_raw => Class::RefKeyWord,
 
-                "self" | "Self" => Class::Self_,
-                "false" | "true" if !is_raw => Class::Bool,
+                    kw::SelfLower | kw::SelfUpper => Class::Self_,
+                    kw::False | kw::True if !is_raw => Class::Bool,
 
-                "Option" | "Result" => Class::PreludeTy,
-                "Some" | "None" | "Ok" | "Err" => Class::PreludeVal,
+                    sym::Option | sym::Result => Class::PreludeTy,
+                    sym::Some | sym::None | sym::Ok | sym::Err => Class::PreludeVal,
 
-                "$crate" => Class::KeyWord,
-                _ if tas.is_reserved_ident() => Class::KeyWord,
+                    _ if token.is_reserved_ident() => Class::KeyWord,
 
-                _ => {
-                    if self.in_macro_nonterminal {
-                        self.in_macro_nonterminal = false;
-                        Class::MacroNonTerminal
-                    } else if peek_is_not {
-                        self.in_macro = true;
-                        Class::Macro
-                    } else {
-                        Class::Ident
+                    _ => {
+                        if self.in_macro_nonterminal {
+                            self.in_macro_nonterminal = false;
+                            Class::MacroNonTerminal
+                        } else if self.peek()? == &token::Not {
+                            self.in_macro = true;
+                            Class::Macro
+                        } else {
+                            Class::Ident
+                        }
                     }
                 }
-            },
+            }
 
             token::Lifetime(..) => Class::Lifetime,
 
-            token::Eof | token::Interpolated(..) | token::Tilde | token::At => Class::None,
+            token::Eof | token::Interpolated(..) |
+            token::Tilde | token::At| token::SingleQuote => Class::None,
         };
 
         // Anything that didn't return above is the simple case where we the
         // class just spans a single token, so we can use the `string` method.
-        out.string(Escape(&self.snip(tas.span)), klass, Some(&tas))
+        out.string(Escape(&self.snip(token.span)), klass)?;
+
+        Ok(())
     }
 
     // Helper function to get a snippet from the source_map.
@@ -417,14 +445,10 @@ impl Class {
     }
 }
 
-fn write_header(class: Option<&str>, id: Option<&str>, out: &mut dyn Write) -> io::Result<()> {
-    write!(out, "<pre ")?;
-    if let Some(id) = id {
-        write!(out, "id='{}' ", id)?;
-    }
-    write!(out, "class=\"rust {}\">\n", class.unwrap_or(""))
+fn write_header(class: Option<&str>, out: &mut dyn Write) -> io::Result<()> {
+    write!(out, "<div class=\"example-wrap\"><pre class=\"rust {}\">\n", class.unwrap_or(""))
 }
 
 fn write_footer(out: &mut dyn Write) -> io::Result<()> {
-    write!(out, "</pre>\n")
+    write!(out, "</pre></div>\n")
 }
