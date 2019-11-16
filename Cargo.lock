@@ -15,7 +15,7 @@ dependencies = [
 
 [[package]]
 name = "rustdoc-highlight"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "log 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]

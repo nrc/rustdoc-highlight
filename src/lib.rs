@@ -11,13 +11,14 @@
 //! `Classifier`.
 
 #![feature(rustc_private)]
-#![feature(bind_by_move_pattern_guards)]
 #![cfg_attr(rustbuild, unstable(feature = "rustc_private", issue = "27812"))]
 #![cfg_attr(rustbuild, feature(staged_api))]
 
 #[macro_use]
 extern crate log;
+extern crate rustc_parse;
 extern crate syntax;
+extern crate syntax_expand;
 extern crate syntax_pos;
 
 mod escape;
@@ -28,12 +29,14 @@ use std::fmt::Display;
 use std::io;
 use std::io::prelude::*;
 
-use syntax::source_map::{SourceMap, FilePathMapping};
-use syntax::parse::lexer;
-use syntax::parse::token::{self, Token};
-use syntax::parse;
+use rustc_parse::lexer;
+use syntax::token::{self, Token};
+use syntax::sess::ParseSess;
+use syntax::source_map::SourceMap;
 use syntax::symbol::{kw, sym};
+use syntax_expand::config::process_configure_mod;
 use syntax_pos::{Span, FileName};
+
 
 /// Highlights `src`, returning the HTML output.
 pub fn render_with_highlighting(
@@ -43,7 +46,6 @@ pub fn render_with_highlighting(
     tooltip: Option<(&str, &str)>,
 ) -> String {
     debug!("highlighting: ================\n{}\n==============", src);
-
     let mut out = Vec::new();
     if let Some((tooltip, class)) = tooltip {
         write!(out, "<div class='information'><div class='tooltip {}'>ⓘ<span \
@@ -51,10 +53,10 @@ pub fn render_with_highlighting(
                class, tooltip).unwrap();
     }
 
-    let sess = parse::ParseSess::new(FilePathMapping::empty());
+    let sess = ParseSess::with_silent_emitter(process_configure_mod);
     let fm = sess
         .source_map()
-        .new_source_file(FileName::Custom("stdin".to_string()), src.to_string());
+        .new_source_file(FileName::Custom("rustdoc-highlighting".to_string()), src.to_string());
     let highlight_result = {
         let lexer = lexer::StringReader::new(&sess, fm, None);
         let mut classifier = Classifier::new(lexer, sess.source_map());
@@ -90,10 +92,10 @@ pub fn render_with_highlighting(
 /// be inserted into an element. C.f., `render_with_highlighting` which includes
 /// an enclosing `<pre>` block.
 pub fn render_inner_with_highlighting(src: &str) -> Result<String, HighlightError> {
-    let sess = parse::ParseSess::new(FilePathMapping::empty());
+    let sess = ParseSess::with_silent_emitter(process_configure_mod);
     let fm = sess
         .source_map()
-        .new_source_file(FileName::Custom("stdin".to_string()), src.to_string());
+        .new_source_file(FileName::Custom("rustdoc-highlighting".to_string()), src.to_string());
 
     let mut out = Vec::new();
     let lexer = lexer::StringReader::new(&sess, fm, None);
